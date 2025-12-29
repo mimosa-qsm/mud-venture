@@ -1,5 +1,11 @@
 # Mud-Venture
 
+注意事項！
+何もかも全てClaude 4.5 Sonnetで作りました。バイブ・コーディングっていうやつです。
+
+Disclaimer!
+Everything, from start to finish, was created with Claude 4.5 Sonnet. Vibe coding, slay.
+
 ---
 
 ## 日本語
