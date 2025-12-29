@@ -1,0 +1,760 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mud-Venture</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
+      background: linear-gradient(to bottom, #BFDBFE, #86EFAC);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+    }
+    .container {
+      background: white;
+      border-radius: 0.5rem;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+      padding: 1.5rem;
+      max-width: 850px;
+    }
+    h1 {
+      font-size: 1.875rem;
+      font-weight: bold;
+      text-align: center;
+      margin-bottom: 1rem;
+      color: #166534;
+    }
+    .canvas-container {
+      border: 4px solid #15803d;
+      border-radius: 0.5rem;
+      overflow: hidden;
+    }
+    .controls {
+      margin-top: 1rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 1rem;
+    }
+    .info {
+      flex: 1;
+      font-size: 0.875rem;
+      color: #374151;
+    }
+    .info p {
+      margin: 0.25rem 0;
+    }
+    .info .bold {
+      font-weight: 600;
+    }
+    .info .stuck {
+      color: #DC2626;
+      font-weight: bold;
+      margin-top: 0.5rem;
+    }
+    .progress-bar {
+      width: 100%;
+      background: #D1D5DB;
+      border-radius: 9999px;
+      height: 1rem;
+      margin-top: 0.25rem;
+      overflow: hidden;
+    }
+    .progress-fill {
+      background: #22C55E;
+      height: 100%;
+      transition: width 0.3s;
+    }
+    .small-text {
+      font-size: 0.75rem;
+      margin-top: 0.25rem;
+    }
+    .btn {
+      padding: 0.75rem 1.5rem;
+      background: #3B82F6;
+      color: white;
+      border: none;
+      border-radius: 0.5rem;
+      font-weight: 600;
+      cursor: pointer;
+      box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+      transition: all 0.2s;
+    }
+    .btn:hover {
+      background: #2563EB;
+      transform: scale(1.05);
+    }
+  </style>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    const MudExplorationGame3D = () => {
+      const containerRef = useRef(null);
+      const sceneRef = useRef(null);
+      const cameraRef = useRef(null);
+      const rendererRef = useRef(null);
+      const playerRef = useRef(null);
+      const mudMaterialsRef = useRef({});
+      const audioContextRef = useRef(null);
+      const lastSquelchTime = useRef(0);
+      
+      const [gameState, setGameState] = useState({
+        sinkDepth: 0,
+        mudLevel: 0,
+        stuck: false,
+        struggleInputs: 0,
+        justEscaped: false,
+        position: { x: 0, z: 0 },
+        currentMudType: null,
+        mudTransition: 0
+      });
+      
+      const [isStruggling, setIsStruggling] = useState(false);
+      const keysRef = useRef({});
+      const [cameraControl, setCameraControl] = useState({
+        angle: 0,
+        distance: 15,
+        height: 12,
+        isDragging: false,
+        lastX: 0
+      });
+      
+      const mudZones = [
+        { x: -45, z: -45, width: 20, depth: 20, type: 'clay', color: 0x8B7355, stickiness: 0.25, moveSpeed: 0.4 },
+        { x: 25, z: -40, width: 22, depth: 18, type: 'volcanic', color: 0x6B6B6B, stickiness: 0.35, moveSpeed: 0.25 },
+        { x: -40, z: 25, width: 24, depth: 20, type: 'peat', color: 0x3D2817, stickiness: 0.5, moveSpeed: 0.2 },
+        { x: 30, z: 30, width: 18, depth: 18, type: 'slime', color: 0x4CAF50, stickiness: 0.4, moveSpeed: 0.35 },
+        { x: -20, z: -10, width: 15, depth: 15, type: 'sludge', color: 0x3E2723, stickiness: 0.55, moveSpeed: 0.15 },
+        { x: 10, z: 5, width: 15, depth: 15, type: 'snow', color: 0xE8F5E9, stickiness: 0.3, moveSpeed: 0.5 }
+      ];
+
+      useEffect(() => {
+        if (!containerRef.current) return;
+
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x87CEEB);
+        scene.fog = new THREE.Fog(0x87CEEB, 30, 80);
+        sceneRef.current = scene;
+
+        const camera = new THREE.PerspectiveCamera(60, 800 / 600, 0.1, 1000);
+        camera.position.set(0, 12, 15);
+        camera.lookAt(0, 0, 0);
+        cameraRef.current = camera;
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(800, 600);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        containerRef.current.appendChild(renderer.domElement);
+        rendererRef.current = renderer;
+
+        const handleMouseDown = (e) => {
+          setCameraControl(prev => ({
+            ...prev,
+            isDragging: true,
+            lastX: e.clientX
+          }));
+        };
+
+        const handleMouseMove = (e) => {
+          setCameraControl(prev => {
+            if (!prev.isDragging) return prev;
+            
+            const deltaX = e.clientX - prev.lastX;
+            const newAngle = prev.angle + deltaX * 0.01;
+            
+            return {
+              ...prev,
+              angle: newAngle,
+              lastX: e.clientX
+            };
+          });
+        };
+
+        const handleMouseUp = () => {
+          setCameraControl(prev => ({
+            ...prev,
+            isDragging: false
+          }));
+        };
+
+        const handleWheel = (e) => {
+          e.preventDefault();
+          setCameraControl(prev => {
+            const newDistance = Math.max(8, Math.min(25, prev.distance + e.deltaY * 0.01));
+            return {
+              ...prev,
+              distance: newDistance
+            };
+          });
+        };
+
+        renderer.domElement.addEventListener('mousedown', handleMouseDown);
+        renderer.domElement.addEventListener('mousemove', handleMouseMove);
+        renderer.domElement.addEventListener('mouseup', handleMouseUp);
+        renderer.domElement.addEventListener('mouseleave', handleMouseUp);
+        renderer.domElement.addEventListener('wheel', handleWheel, { passive: false });
+
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        dirLight.position.set(20, 30, 20);
+        dirLight.castShadow = true;
+        dirLight.shadow.camera.left = -30;
+        dirLight.shadow.camera.right = 30;
+        dirLight.shadow.camera.top = 30;
+        dirLight.shadow.camera.bottom = -30;
+        dirLight.shadow.mapSize.width = 2048;
+        dirLight.shadow.mapSize.height = 2048;
+        scene.add(dirLight);
+
+        const groundGeometry = new THREE.PlaneGeometry(120, 120);
+        const groundMaterial = new THREE.MeshLambertMaterial({ color: 0x8FBC8F });
+        const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+        ground.rotation.x = -Math.PI / 2;
+        ground.receiveShadow = true;
+        scene.add(ground);
+
+        mudZones.forEach(zone => {
+          const mudGeometry = new THREE.PlaneGeometry(zone.width, zone.depth);
+          const mudMaterial = new THREE.MeshLambertMaterial({ 
+            color: zone.color,
+            roughness: 0.9
+          });
+          const mudPlane = new THREE.Mesh(mudGeometry, mudMaterial);
+          mudPlane.rotation.x = -Math.PI / 2;
+          mudPlane.position.set(zone.x + zone.width / 2, 0.02, zone.z + zone.depth / 2);
+          mudPlane.receiveShadow = true;
+          scene.add(mudPlane);
+
+          const canvas = document.createElement('canvas');
+          const ctx = canvas.getContext('2d');
+          canvas.width = 256;
+          canvas.height = 128;
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
+          ctx.font = 'bold 48px Arial';
+          ctx.textAlign = 'center';
+          ctx.fillText(zone.type.toUpperCase(), 128, 80);
+
+          const texture = new THREE.CanvasTexture(canvas);
+          const labelMaterial = new THREE.MeshBasicMaterial({ 
+            map: texture, 
+            transparent: true,
+            side: THREE.DoubleSide
+          });
+          const labelGeometry = new THREE.PlaneGeometry(4, 2);
+          const label = new THREE.Mesh(labelGeometry, labelMaterial);
+          label.position.set(zone.x + zone.width / 2, 0.5, zone.z + zone.depth / 2);
+          label.rotation.x = -Math.PI / 2;
+          scene.add(label);
+        });
+
+        const player = new THREE.Group();
+        
+        const bodyGeometry = new THREE.CylinderGeometry(0.4, 0.5, 1.5, 8);
+        const bodyMaterial = new THREE.MeshLambertMaterial({ color: 0xFFB6C1 });
+        const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+        body.position.y = 0.75;
+        body.castShadow = true;
+        body.name = 'body';
+        player.add(body);
+
+        const headGeometry = new THREE.SphereGeometry(0.5, 16, 16);
+        const headMaterial = new THREE.MeshLambertMaterial({ color: 0xFFDAB9 });
+        const head = new THREE.Mesh(headGeometry, headMaterial);
+        head.position.y = 2;
+        head.castShadow = true;
+        head.name = 'head';
+        player.add(head);
+
+        const hairGroup = new THREE.Group();
+        const hairMaterial = new THREE.MeshLambertMaterial({ color: 0xFFD700 });
+        
+        const hair1 = new THREE.Mesh(new THREE.SphereGeometry(0.4, 16, 16), hairMaterial);
+        hair1.position.set(0, 2.35, 0);
+        hair1.scale.set(1.4, 1.1, 1.4);
+        hairGroup.add(hair1);
+
+        const hair2 = new THREE.Mesh(new THREE.SphereGeometry(0.35, 12, 12), hairMaterial);
+        hair2.position.set(-0.45, 2.1, -0.1);
+        hair2.scale.set(1, 1.3, 1);
+        hairGroup.add(hair2);
+
+        const hair3 = new THREE.Mesh(new THREE.SphereGeometry(0.35, 12, 12), hairMaterial);
+        hair3.position.set(0.45, 2.1, -0.1);
+        hair3.scale.set(1, 1.3, 1);
+        hairGroup.add(hair3);
+
+        const hair4 = new THREE.Mesh(new THREE.SphereGeometry(0.3, 12, 12), hairMaterial);
+        hair4.position.set(0, 1.9, -0.45);
+        hair4.scale.set(1.2, 1.8, 1);
+        hairGroup.add(hair4);
+
+        const hair5 = new THREE.Mesh(new THREE.SphereGeometry(0.28, 12, 12), hairMaterial);
+        hair5.position.set(0, 1.4, -0.5);
+        hair5.scale.set(1.1, 1.6, 0.9);
+        hairGroup.add(hair5);
+
+        const hair6 = new THREE.Mesh(new THREE.SphereGeometry(0.25, 12, 12), hairMaterial);
+        hair6.position.set(-0.15, 0.9, -0.45);
+        hair6.scale.set(0.9, 1.4, 0.8);
+        hairGroup.add(hair6);
+
+        const hair7 = new THREE.Mesh(new THREE.SphereGeometry(0.25, 12, 12), hairMaterial);
+        hair7.position.set(0.15, 0.9, -0.45);
+        hair7.scale.set(0.9, 1.4, 0.8);
+        hairGroup.add(hair7);
+
+        const hair8 = new THREE.Mesh(new THREE.SphereGeometry(0.22, 12, 12), hairMaterial);
+        hair8.position.set(-0.1, 0.4, -0.4);
+        hair8.scale.set(0.8, 1.2, 0.7);
+        hairGroup.add(hair8);
+
+        const hair9 = new THREE.Mesh(new THREE.SphereGeometry(0.22, 12, 12), hairMaterial);
+        hair9.position.set(0.1, 0.4, -0.4);
+        hair9.scale.set(0.8, 1.2, 0.7);
+        hairGroup.add(hair9);
+
+        hairGroup.name = 'hair';
+        player.add(hairGroup);
+
+        const eyeGeometry = new THREE.SphereGeometry(0.08, 8, 8);
+        const eyeMaterial = new THREE.MeshBasicMaterial({ color: 0x000000 });
+        const leftEye = new THREE.Mesh(eyeGeometry, eyeMaterial);
+        leftEye.position.set(-0.15, 2.1, 0.4);
+        player.add(leftEye);
+        const rightEye = new THREE.Mesh(eyeGeometry, eyeMaterial);
+        rightEye.position.set(0.15, 2.1, 0.4);
+        player.add(rightEye);
+
+        const legGeometry = new THREE.CylinderGeometry(0.15, 0.15, 1, 8);
+        const legMaterial = new THREE.MeshLambertMaterial({ color: 0xFFDAB9 });
+        const leftLeg = new THREE.Mesh(legGeometry, legMaterial);
+        leftLeg.position.set(-0.25, -0.5, 0);
+        leftLeg.castShadow = true;
+        leftLeg.name = 'leftLeg';
+        player.add(leftLeg);
+        const rightLeg = new THREE.Mesh(legGeometry, legMaterial);
+        rightLeg.position.set(0.25, -0.5, 0);
+        rightLeg.castShadow = true;
+        rightLeg.name = 'rightLeg';
+        player.add(rightLeg);
+
+        player.position.y = 1; // Standing on grass
+        scene.add(player);
+        playerRef.current = player;
+
+        mudMaterialsRef.current = {
+          clay: new THREE.MeshLambertMaterial({ color: 0x8B7355 }),
+          volcanic: new THREE.MeshLambertMaterial({ color: 0x6B6B6B }),
+          peat: new THREE.MeshLambertMaterial({ color: 0x3D2817 }),
+          slime: new THREE.MeshLambertMaterial({ color: 0x4CAF50 }),
+          sludge: new THREE.MeshLambertMaterial({ color: 0x3E2723 }),
+          snow: new THREE.MeshLambertMaterial({ color: 0xE8F5E9 })
+        };
+
+        const handleKeyDown = (e) => {
+          keysRef.current[e.key.toLowerCase()] = true;
+        };
+        const handleKeyUp = (e) => {
+          keysRef.current[e.key.toLowerCase()] = false;
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        window.addEventListener('keyup', handleKeyUp);
+
+        let animationId;
+        const animate = () => {
+          animationId = requestAnimationFrame(animate);
+          renderer.render(scene, camera);
+        };
+        animate();
+
+        return () => {
+          window.removeEventListener('keydown', handleKeyDown);
+          window.removeEventListener('keyup', handleKeyUp);
+          if (renderer.domElement) {
+            renderer.domElement.removeEventListener('mousedown', handleMouseDown);
+            renderer.domElement.removeEventListener('mousemove', handleMouseMove);
+            renderer.domElement.removeEventListener('mouseup', handleMouseUp);
+            renderer.domElement.removeEventListener('mouseleave', handleMouseUp);
+            renderer.domElement.removeEventListener('wheel', handleWheel);
+          }
+          cancelAnimationFrame(animationId);
+          if (containerRef.current && renderer.domElement) {
+            containerRef.current.removeChild(renderer.domElement);
+          }
+          renderer.dispose();
+        };
+      }, []);
+
+      const lastKeyStateRef = useRef({});
+      
+      useEffect(() => {
+        const gameLoop = setInterval(() => {
+          if (!playerRef.current) return;
+
+          const player = playerRef.current;
+          const keys = keysRef.current;
+          const baseSpeed = 0.15;
+
+          setGameState(prev => {
+            let newX = player.position.x;
+            let newZ = player.position.z;
+            let newSinkDepth = prev.sinkDepth;
+            let newMudLevel = prev.mudLevel;
+            let newStuck = prev.stuck;
+            let newStruggleInputs = prev.struggleInputs;
+            let newJustEscaped = prev.justEscaped;
+            let newCurrentMudType = prev.currentMudType;
+            let newMudTransition = prev.mudTransition;
+
+            const inMud = mudZones.find(zone => 
+              player.position.x > zone.x && 
+              player.position.x < zone.x + zone.width &&
+              player.position.z > zone.z && 
+              player.position.z < zone.z + zone.depth
+            );
+
+            if (inMud) {
+              // Check if entering a different mud type
+              if (newCurrentMudType !== inMud.type) {
+                newCurrentMudType = inMud.type;
+                newMudTransition = 0; // Start transition to new mud color
+              } else {
+                // Gradually transition to new mud color
+                newMudTransition = Math.min(1, prev.mudTransition + 0.02);
+              }
+              
+              // Only sink if not just escaped and moving
+              const isMoving = keys['arrowleft'] || keys['arrowright'] || 
+                              keys['arrowup'] || keys['arrowdown'] ||
+                              keys['a'] || keys['d'] || keys['w'] || keys['s'];
+              
+              if (!newJustEscaped) {
+                newSinkDepth = Math.min(2.5, prev.sinkDepth + 0.015);
+              } else if (isMoving) {
+                // Start sinking again when moving after escape
+                newJustEscaped = false;
+                newSinkDepth = Math.min(2.5, prev.sinkDepth + 0.015);
+              }
+              
+              if (newSinkDepth > 0.3 && newMudLevel < 1) newMudLevel = 1;
+              if (newSinkDepth > 0.8 && newMudLevel < 2) newMudLevel = 2;
+              if (newSinkDepth > 1.5 && newMudLevel < 3) newMudLevel = 3;
+              if (newSinkDepth > 2.0 && newMudLevel < 4) newMudLevel = 4;
+
+              // Random chance to get stuck while walking (5% per frame when deep enough)
+              const deepEnough = newSinkDepth > 1.0;
+              const randomStuck = deepEnough && Math.random() < 0.02 && !newJustEscaped;
+              
+              if (randomStuck && !prev.stuck) {
+                // Suddenly get stuck - sink completely!
+                newSinkDepth = 15.0; // Extra deep to ensure complete disappearance
+                newStuck = true;
+                playSquelchSound('pop');
+              }
+
+              const speed = baseSpeed * inMud.moveSpeed;
+
+              if (!newStuck) {
+                if (keys['arrowleft'] || keys['a']) {
+                  newX -= speed;
+                  if (Math.random() < 0.05) playSquelchSound('step');
+                }
+                if (keys['arrowright'] || keys['d']) {
+                  newX += speed;
+                  if (Math.random() < 0.05) playSquelchSound('step');
+                }
+                if (keys['arrowup'] || keys['w']) {
+                  newZ -= speed;
+                  if (Math.random() < 0.05) playSquelchSound('step');
+                }
+                if (keys['arrowdown'] || keys['s']) {
+                  newZ += speed;
+                  if (Math.random() < 0.05) playSquelchSound('step');
+                }
+              } else {
+                // Stuck behavior - struggle to rise up
+                const movementKeys = ['arrowleft', 'arrowright', 'arrowup', 'arrowdown', 'a', 'd', 'w', 's'];
+                const isPressingAny = movementKeys.some(key => keys[key]);
+                
+                if (isPressingAny) {
+                  // Struggling - slowly rise up
+                  newSinkDepth = Math.max(1.5, newSinkDepth - 0.08);
+                  setIsStruggling(true);
+                  
+                  // Count key presses
+                  movementKeys.forEach(key => {
+                    if (keys[key] && !lastKeyStateRef.current[key]) {
+                      newStruggleInputs += 1;
+                      playSquelchSound(Math.random() > 0.5 ? 'low' : 'high');
+                      
+                      // Escape after 10 inputs
+                      if (newStruggleInputs >= 10) {
+                        newStuck = false;
+                        newSinkDepth = 0;
+                        newStruggleInputs = 0;
+                        newJustEscaped = true;
+                        setIsStruggling(false);
+                        playSquelchSound('pop');
+                      }
+                    }
+                  });
+                  
+                  newX += (Math.random() - 0.5) * 0.02;
+                  newZ += (Math.random() - 0.5) * 0.02;
+                } else {
+                  // Not struggling - slowly sink back down
+                  newSinkDepth = Math.min(15.0, newSinkDepth + 0.04);
+                  setIsStruggling(false);
+                }
+                
+                // Update last key state
+                movementKeys.forEach(key => {
+                  lastKeyStateRef.current[key] = keys[key];
+                });
+              }
+
+              // Apply mud materials with blending
+              const newMudMat = mudMaterialsRef.current[inMud.type];
+              
+              // Create blended material if transitioning between mud types
+              const applyMudToBodyPart = (child) => {
+                if (newMudTransition < 1 && child.userData.previousMudColor) {
+                  // Blend between old and new mud color
+                  const oldColor = new THREE.Color(child.userData.previousMudColor);
+                  const newColor = new THREE.Color(newMudMat.color);
+                  const blendedColor = oldColor.clone().lerp(newColor, newMudTransition);
+                  child.material = new THREE.MeshLambertMaterial({ color: blendedColor });
+                } else {
+                  // Fully transitioned to new mud
+                  child.material = newMudMat.clone();
+                  child.userData.previousMudColor = newMudMat.color.getHex();
+                }
+              };
+              
+              if (newMudLevel >= 1) {
+                player.children.forEach(child => {
+                  if (child.name === 'leftLeg' || child.name === 'rightLeg') {
+                    applyMudToBodyPart(child);
+                  }
+                });
+              }
+              if (newMudLevel >= 2) {
+                player.children.forEach(child => {
+                  if (child.name === 'body') {
+                    applyMudToBodyPart(child);
+                  }
+                });
+              }
+              if (newMudLevel >= 4) {
+                player.children.forEach(child => {
+                  if (child.name === 'head') {
+                    applyMudToBodyPart(child);
+                  } else if (child.name === 'hair') {
+                    child.children.forEach(hairPart => {
+                      applyMudToBodyPart(hairPart);
+                    });
+                  }
+                });
+              }
+            } else {
+              newSinkDepth = Math.max(0, prev.sinkDepth - 0.08);
+              newStuck = false;
+              newStruggleInputs = 0;
+              newJustEscaped = false;
+              newMudTransition = 0;
+              setIsStruggling(false);
+              
+              if (keys['arrowleft'] || keys['a']) newX -= baseSpeed;
+              if (keys['arrowright'] || keys['d']) newX += baseSpeed;
+              if (keys['arrowup'] || keys['w']) newZ -= baseSpeed;
+              if (keys['arrowdown'] || keys['s']) newZ += baseSpeed;
+            }
+
+            newX = Math.max(-55, Math.min(55, newX));
+            newZ = Math.max(-55, Math.min(55, newZ));
+
+            player.position.x = newX;
+            player.position.z = newZ;
+            player.position.y = 1 - newSinkDepth; // Start at ground level (1), sink down
+
+            if (isStruggling) {
+              player.rotation.z = Math.sin(Date.now() / 80) * 0.1;
+              player.rotation.x = Math.cos(Date.now() / 100) * 0.05;
+            } else {
+              player.rotation.z = 0;
+              player.rotation.x = 0;
+            }
+
+            if (cameraRef.current) {
+              const cam = cameraRef.current;
+              const angle = cameraControl.angle;
+              const distance = cameraControl.distance;
+              const height = cameraControl.height;
+              
+              cam.position.x = player.position.x + Math.sin(angle) * distance;
+              cam.position.z = player.position.z + Math.cos(angle) * distance;
+              cam.position.y = player.position.y + height;
+              cam.lookAt(player.position.x, player.position.y + 1, player.position.z);
+            }
+
+            return {
+              sinkDepth: newSinkDepth,
+              mudLevel: newMudLevel,
+              stuck: newStuck,
+              struggleInputs: newStruggleInputs,
+              justEscaped: newJustEscaped,
+              position: { x: newX, z: newZ },
+              currentMudType: newCurrentMudType,
+              mudTransition: newMudTransition
+            };
+          });
+        }, 1000 / 60);
+
+        return () => clearInterval(gameLoop);
+      }, [isStruggling, cameraControl]);
+
+      const playSquelchSound = (type = 'normal') => {
+        if (!audioContextRef.current) {
+          audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
+        }
+        
+        const ctx = audioContextRef.current;
+        const oscillator = ctx.createOscillator();
+        const gainNode = ctx.createGain();
+        
+        oscillator.connect(gainNode);
+        gainNode.connect(ctx.destination);
+        
+        oscillator.start(ctx.currentTime);
+        
+        if (type === 'low') {
+          oscillator.frequency.setValueAtTime(60, ctx.currentTime);
+          oscillator.frequency.exponentialRampToValueAtTime(30, ctx.currentTime + 0.25);
+          gainNode.gain.setValueAtTime(0.12, ctx.currentTime);
+          gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.25);
+          oscillator.stop(ctx.currentTime + 0.25);
+        } else if (type === 'high') {
+          oscillator.frequency.setValueAtTime(90, ctx.currentTime);
+          oscillator.frequency.exponentialRampToValueAtTime(45, ctx.currentTime + 0.18);
+          gainNode.gain.setValueAtTime(0.1, ctx.currentTime);
+          gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.18);
+          oscillator.stop(ctx.currentTime + 0.18);
+        } else if (type === 'pop') {
+          oscillator.frequency.setValueAtTime(150, ctx.currentTime);
+          oscillator.frequency.exponentialRampToValueAtTime(50, ctx.currentTime + 0.3);
+          gainNode.gain.setValueAtTime(0.2, ctx.currentTime);
+          gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.3);
+          oscillator.stop(ctx.currentTime + 0.3);
+        } else if (type === 'step') {
+          // Walking through mud sound
+          oscillator.frequency.setValueAtTime(80, ctx.currentTime);
+          oscillator.frequency.exponentialRampToValueAtTime(40, ctx.currentTime + 0.15);
+          gainNode.gain.setValueAtTime(0.08, ctx.currentTime);
+          gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.15);
+          oscillator.stop(ctx.currentTime + 0.15);
+        } else {
+          oscillator.frequency.setValueAtTime(70, ctx.currentTime);
+          oscillator.frequency.exponentialRampToValueAtTime(35, ctx.currentTime + 0.2);
+          gainNode.gain.setValueAtTime(0.15, ctx.currentTime);
+          gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.2);
+          oscillator.stop(ctx.currentTime + 0.2);
+        }
+      };
+
+      const handleCleanUp = () => {
+        if (!playerRef.current) return;
+        
+        setGameState(prev => ({ 
+          ...prev, 
+          mudLevel: 0, 
+          sinkDepth: 0, 
+          stuck: false, 
+          struggleInputs: 0,
+          justEscaped: false,
+          currentMudType: null,
+          mudTransition: 0
+        }));
+
+        // Reset materials and clear previous mud data
+        const player = playerRef.current;
+        player.children.forEach(child => {
+          child.userData.previousMudColor = undefined;
+          
+          if (child.name === 'body') {
+            child.material = new THREE.MeshLambertMaterial({ color: 0xFFB6C1 });
+          } else if (child.name === 'leftLeg' || child.name === 'rightLeg') {
+            child.material = new THREE.MeshLambertMaterial({ color: 0xFFDAB9 });
+          } else if (child.name === 'head') {
+            child.material = new THREE.MeshLambertMaterial({ color: 0xFFDAB9 });
+          } else if (child.name === 'hair') {
+            child.children.forEach(hairPart => {
+              hairPart.userData.previousMudColor = undefined;
+              hairPart.material = new THREE.MeshLambertMaterial({ color: 0xFFD700 });
+            });
+          }
+        });
+        
+        playerRef.current.position.y = 1;
+      };
+
+      return (
+        <div className="container">
+          <h1>Mud-Venture</h1>
+          
+          <div ref={containerRef} className="canvas-container" />
+          
+          <div className="controls">
+            <div className="info">
+              <p className="bold">Controls:</p>
+              <p>• WASD/Arrows - Move</p>
+              <p>• Mouse Drag - Rotate Camera</p>
+              <p>• Mouse Scroll - Zoom In/Out</p>
+              <p style={{marginTop: '0.5rem'}}>Sink Depth: {(gameState.sinkDepth * 40).toFixed(0)}%</p>
+              <p>Mud Coverage: {['Clean', 'Legs', 'Torso', 'Shoulders', 'Head'][gameState.mudLevel]}</p>
+              {gameState.stuck && (
+                <>
+                  <p className="stuck">⚠ STUCK IN MUD!</p>
+                  <div className="progress-bar">
+                    <div 
+                      className="progress-fill"
+                      style={{ width: `${(gameState.struggleInputs / 10) * 100}%` }}
+                    />
+                  </div>
+                  <p className="small-text">Press any movement key 10 times! ({gameState.struggleInputs}/10)</p>
+                </>
+              )}
+            </div>
+            
+            <button onClick={handleCleanUp} className="btn">
+              Clean Up
+            </button>
+          </div>
+        </div>
+      );
+    };
+
+    ReactDOM.render(<MudExplorationGame3D />, document.getElementById('root'));
+  </script>
+</body>
+</html>
